@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IDNote-Demo</title>
+
+    <!-- DaisyUI + Tailwind CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/modern-normalize/3.0.1/modern-normalize.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+    <!-- Vue 3 和相关库 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/vue-demi@0.14.10/lib/index.iife.js"></script>
+    <script src="https://unpkg.com/pinia@2.1.7/dist/pinia.iife.js"></script>
+    <script src="https://unpkg.com/@vueuse/shared@10.7.2/index.iife.min.js"></script>
+    <script src="https://unpkg.com/@vueuse/core@10.7.2/index.iife.min.js"></script>
+
+    <!-- 工具库 -->
+    <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"></script>
+    <!-- Buffer 浏览器版本 -->
+    <script src="https://cdn.jsdelivr.net/npm/buffer@6.0.3/dist/buffer.min.js"></script>
+    <script>
+        // 确保 Buffer 全局可用
+        if (typeof buffer !== 'undefined' && buffer.Buffer) {
+            window.Buffer = buffer.Buffer;
+        }
+    </script>
+
+    <style>
+        /* 自定义样式 */
+        .modal-backdrop {
+            background: rgba(0, 0, 0, 0.5);
+        }
+
+        .fade-enter-active, .fade-leave-active {
+            transition: opacity 0.3s;
+        }
+
+        .fade-enter-from, .fade-leave-to {
+            opacity: 0;
+        }
+
+        .scale-enter-active, .scale-leave-active {
+            transition: all 0.3s;
+        }
+
+        .scale-enter-from, .scale-leave-to {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+
+        /* Loading spinner */
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* 用户头像样式 */
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+
+    <script type="module">
+        // 等待所有库加载完成
+        window.addEventListener('load', () => {
+            console.log('All libraries loaded, checking...');
+            console.log('Vue:', typeof Vue !== 'undefined' ? '✓' : '✗');
+            console.log('Pinia:', typeof Pinia !== 'undefined' ? '✓' : '✗');
+            console.log('VueUse:', typeof VueUse !== 'undefined' ? '✓' : '✗');
+            console.log('Buffer:', typeof Buffer !== 'undefined' ? '✓' : '✗');
+        });
+
+        // 检查必要的全局变量
+        if (typeof Vue === 'undefined') {
+            throw new Error('Vue is not loaded');
+        }
+        if (typeof Pinia === 'undefined') {
+            throw new Error('Pinia is not loaded');
+        }
+        if (typeof VueUse === 'undefined') {
+            console.warn('VueUse is not loaded - will use fallback implementation');
+        }
+        if (typeof Buffer === 'undefined') {
+            console.warn('Buffer is not loaded - Buffer operations will be limited');
+            // 提供简单的 Buffer 降级实现
+            window.Buffer = {
+                from: (data, encoding) => {
+                    if (encoding === 'hex') {
+                        // 将 hex 字符串转换为字节数组
+                        const bytes = [];
+                        for (let i = 0; i < data.length; i += 2) {
+                            bytes.push(parseInt(data.substr(i, 2), 16));
+                        }
+                        return {
+                            toString: (toEncoding) => {
+                                if (toEncoding === 'base64') {
+                                    // 简单的 base64 编码
+                                    return btoa(String.fromCharCode.apply(null, bytes));
+                                }
+                                return data;
+                            }
+                        };
+                    }
+                    return { toString: () => data };
+                }
+            };
+        }
+
+        const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
+        const { defineStore, createPinia } = Pinia;
+
+        // VueUse Core - 使用正确的全局变量名，如果失败则使用降级实现
+        let useLocalStorage, createGlobalState;
+
+        if (typeof VueUse !== 'undefined') {
+            ({ useLocalStorage, createGlobalState } = VueUse);
+        } else {
+            // 降级实现：自己实现 useLocalStorage 和 createGlobalState
+            console.warn('VueUse not found, using fallback implementation');
+
+            useLocalStorage = (key, initialValue) => {
+                const data = ref(initialValue);
+
+                // 从 localStorage 读取初始值
+                try {
+                    const item = localStorage.getItem(key);
+                    if (item !== null) {
+                        data.value = JSON.parse(item);
+                    }
+                } catch (error) {
+                    console.error('Error reading from localStorage:', error);
+                }
+
+                // 监听变化并保存到 localStorage
+                watch(data, (newValue) => {
+                    try {
+                        localStorage.setItem(key, JSON.stringify(newValue));
+                    } catch (error) {
+                        console.error('Error writing to localStorage:', error);
+                    }
+                }, { deep: true });
+
+                return data;
+            };
+
+            createGlobalState = (stateFactory) => {
+                let state;
+                return () => {
+                    if (!state) {
+                        state = stateFactory();
+                    }
+                    return state;
+                };
+            };
+        }
+
+        // ==================== 常量定义 ====================
+        const CONSTANTS = {
+            NETWORK: 'livenet',
+            SIGNING_MESSAGE: 'IDNote Authentication',
+            MAN_PUB_KEY: '048add0a6298f10a97785f7dd069eedb83d279a6f03e73deec0549e7d6fcaac4eef2c279cf7608be907a73c89eb44c28db084c27b588f1bd869321a6f104ec642d',
+            MAN_BASE_URL: 'https://man.metaid.io/api',
+            BTC_FEE_RATE_URL: 'https://api.mvcscan.com/browser/v1/fees/recommended?chain=btc',
+            MVC_FEE_RATE_URL: 'https://api.mvcscan.com/browser/v1/fees/recommended?net=livenet',
+        };
+
+        // ==================== Toast/Alert 工具 ====================
+        // 创建一个简单的toast系统使用DaisyUI的alert
+        const useToast = createGlobalState(() => {
+            const alerts = ref([]);
+            let alertId = 0;
+
+            const showToast = (message, type = 'info') => {
+                const id = alertId++;
+                alerts.value.push({ id, message, type });
+                setTimeout(() => {
+                    alerts.value = alerts.value.filter(a => a.id !== id);
+                }, 3000);
+            };
+
+            return { alerts, showToast };
+        });
+
+        // ==================== 工具函数 ====================
+        // 延迟函数
+        function sleep(timer = 2000) {
+            return new Promise(resolve => setTimeout(resolve, timer));
+        }
+
+        // 完整重新加载页面
+        function completeReload() {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('clear');
+            url.searchParams.delete('address');
+            window.location.href = url.href;
+        }
+
+        // ==================== HTTP 请求工具 (使用 Fetch 替换 Axios) ====================
+        // 创建HTTP请求类
+        class HttpRequest {
+            constructor(baseURL, config = {}) {
+                this.baseURL = baseURL;
+                this.config = config;
+            }
+
+            getToken() {
+                return localStorage.getItem('metaid_access_token');
+            }
+
+            async request(url, options = {}) {
+                const token = this.getToken();
+                const headers = {
+                    'Content-Type': 'application/json',
+                    ...options.headers,
+                };
+
+                if (token) {
+                    headers.Authorization = `Bearer ${token}`;
+                }
+
+                try {
+                    console.log(`📤 [${options.method || 'GET'}] ${url}`);
+
+                    const response = await fetch(this.baseURL + url, {
+                        ...options,
+                        headers,
+                    });
+
+                    console.log(`📥 [${options.method || 'GET'}] ${url} - Status: ${response.status}`);
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+
+                    // 自定义响应处理
+                    if (this.config.responseHandler) {
+                        return this.config.responseHandler({ data });
+                    }
+
+                    // 默认响应处理
+                    if (data && typeof data.code === 'number') {
+                        if (data.code === 1 || data.code === 0 || data.code === 200) {
+                            return data.data !== undefined ? data.data : data;
+                        }
+                        throw new Error(data.message || '请求失败');
+                    }
+
+                    return data;
+                } catch (error) {
+                    console.error('❌ Request error:', error);
+                    throw error;
+                }
+            }
+
+            async get(url, params = {}) {
+                const query = new URLSearchParams(params).toString();
+                const fullUrl = query ? `${url}?${query}` : url;
+                return this.request(fullUrl, { method: 'GET' });
+            }
+
+            async post(url, data = {}) {
+                return this.request(url, {
+                    method: 'POST',
+                    body: JSON.stringify(data),
+                });
+            }
+        }
+
+        // MAN API 实例
+        const manApi = new HttpRequest(CONSTANTS.MAN_BASE_URL, {
+            responseHandler: ({ data }) => {
+                return new Promise((resolve, reject) => {
+                    if (data && typeof data.code === 'number') {
+                        if (data.code === 1) {
+                            resolve(data.data);
+                        } else {
+                            reject({ code: data.code, message: data.message || '请求失败' });
+                        }
+                    } else {
+                        resolve(data.data || data);
+                    }
+                });
+            },
+        });
+
+        // ==================== Pinia Stores ====================
+
+        // Root Store - 根状态管理
+        const useRootStore = defineStore('root', {
+            state: () => ({
+                isWebView: false
+            }),
+            actions: {
+                // 检查是否在WebView中
+                checkWebViewBridge() {
+                    const UA = window.navigator.userAgent.toLowerCase();
+                    const isAndroid = !!(UA && UA.indexOf('android') > 0);
+                    const isIOS = !!(UA && /iphone|ipad|ipod|ios/.test(UA));
+
+                    if (isIOS || isAndroid) {
+                        if (window?.navigator) {
+                            const userAgent = window?.navigator?.userAgent || '';
+                            if (userAgent === 'IDChat-iOS' || userAgent === 'IDChat-Android') {
+                                this.isWebView = true;
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                },
+
+                // 检查BTC和MVC地址是否一致
+                async checkBtcAddressSameAsMvc() {
+                    const connectionStore = useConnectionStore();
+                    const mvcAddress = await connectionStore.adapter.getMvcAddress();
+                    const btcAddress = await connectionStore.adapter.getBtcAddress();
+
+                    if (mvcAddress && btcAddress && mvcAddress !== btcAddress) {
+                        throw new Error('BTC 地址与 MVC 地址不一致，请确保使用相同的钱包地址');
+                    }
+                }
+            }
+        });
+
+        // Network Store - 网络状态管理
+        const useNetworkStore = defineStore('network', {
+            getters: {
+                network: () => CONSTANTS.NETWORK,
+                isTestnet: () => CONSTANTS.NETWORK === 'testnet',
+            }
+        });
+
+        // Layout Store - 布局状态管理
+        const useLayoutStore = defineStore('layout', {
+            state: () => ({
+                isShowProfileEditModal: false
+            })
+        });
+
+        // User Store - 用户信息管理
+        const useUserStore = defineStore('user', {
+            state: () => ({
+                last: useLocalStorage('user-info', {
+                    address: '',
+                    avatar: '',
+                    avatarId: '',
+                    background: '',
+                    bio: '',
+                    bioId: '',
+                    blocked: false,
+                    chainName: 'mvc',
+                    fdv: 0,
+                    followCount: 0,
+                    isInit: false,
+                    metaid: '',
+                    name: '',
+                    nameId: '',
+                    nftAvatar: '',
+                    nftAvatarId: '',
+                    number: 0,
+                    pdv: 0,
+                    pinId: '',
+                    soulbondToken: '',
+                    unconfirmed: '',
+                    chatpubkey: '',
+                })
+            }),
+            getters: {
+                has: (state) => !!state.last,
+                isAuthorized: (state) => {
+                    const connectedStore = useConnectionStore();
+                    return !!(state.last.address && state.last.metaid && connectedStore.last.status === 'connected');
+                }
+            },
+            actions: {
+                async updateUserInfo(userInfo) {
+                    this.last = { ...this.last, ...userInfo };
+                },
+
+                async setUserInfo(address) {
+                    if (!address) return this.last;
+
+                    try {
+                        const userRes = await manApi.get(`/info/address/${address}`);
+                        if (userRes) {
+                            this.last = userRes;
+
+                            // 如果没有用户名，显示编辑资料模态框
+                            if (!this.last.name) {
+                                const layoutStore = useLayoutStore();
+                                layoutStore.isShowProfileEditModal = true;
+                            }
+                        }
+                        return this.last;
+                    } catch (e) {
+                        const { showToast } = useToast();
+                        showToast(e.message, 'error');
+                        return this.last;
+                    }
+                },
+
+                clearUserInfo() {
+                    this.last = {
+                        address: '',
+                        avatar: '',
+                        avatarId: '',
+                        background: '',
+                        bio: '',
+                        bioId: '',
+                        blocked: false,
+                        chainName: 'mvc',
+                        fdv: 0,
+                        followCount: 0,
+                        isInit: false,
+                        metaid: '',
+                        name: '',
+                        nameId: '',
+                        nftAvatar: '',
+                        nftAvatarId: '',
+                        number: 0,
+                        pdv: 0,
+                        pinId: '',
+                        soulbondToken: '',
+                        unconfirmed: '',
+                        chatpubkey: '',
+                    };
+                }
+            }
+        });
+
+        // Credentials Store - 凭证管理
+        const useCredentialsStore = defineStore('credentials', {
+            state: () => ({
+                credentials: useLocalStorage('credentials', []),
+                signing: false
+            }),
+            getters: {
+                getByAddress: (state) => (address) => {
+                    return state.credentials.find(s => s.address === address);
+                },
+                has: (state) => (address) => {
+                    return !!state.credentials.find(s => s.address === address);
+                },
+                get: (state) => {
+                    const connectionStore = useConnectionStore();
+                    const connected = connectionStore.connected;
+                    const address = connectionStore.getAddress;
+                    const credential = state.credentials.find(s => s.address === address);
+                    const ready = connected && !!credential;
+                    return ready ? credential : false;
+                },
+                ready: (state) => {
+                    const connectionStore = useConnectionStore();
+                    const connected = connectionStore.connected;
+                    const address = connectionStore.getAddress;
+                    const credential = state.credentials.find(s => s.address === address);
+                    return connected && !!credential;
+                }
+            },
+            actions: {
+                add({ publicKey, signature, address }) {
+                    if (this.credentials.find(s => s.address === address)) return;
+                    this.credentials.push({ publicKey, signature, address });
+                },
+
+                remove(address) {
+                    this.credentials = this.credentials.filter(s => s.address !== address);
+                },
+
+                clear() {
+                    this.credentials = [];
+                },
+
+                async sign() {
+                    const connectionStore = useConnectionStore();
+                    const connection = connectionStore.last;
+
+                    if (!connection.address || connection.status === 'disconnected') {
+                        throw new Error('Please connect to a wallet first.');
+                    }
+
+                    const address = connectionStore.getAddress;
+                    const credential = this.getByAddress(address);
+                    if (credential) return credential;
+
+                    this.signing = true;
+
+                    const message = CONSTANTS.SIGNING_MESSAGE;
+                    let publicKey = connection.pubKey;
+                    let signature = '';
+
+                    try {
+                        publicKey = await connectionStore.adapter.getMvcPublickey();
+                        signature = await connectionStore.adapter.signMessage(message);
+
+                        this.add({ publicKey, signature, address });
+                        return { publicKey, signature, address };
+                    } catch (e) {
+                        this.signing = false;
+                        throw e;
+                    }
+                },
+
+                async login() {
+                    const connectionStore = useConnectionStore();
+                    const synced = await connectionStore.sync();
+                    if (!synced) return false;
+
+                    const credential = await this.sign();
+                    if (!credential) return false;
+
+                    const userStore = useUserStore();
+                    await userStore.setUserInfo(credential.address);
+                    return credential;
+                }
+            }
+        });
+
+        // Chain Store - 费率管理
+        const useChainStore = defineStore('chain', {
+            state: () => ({
+                state: useLocalStorage('chain-fee-rates', {
+                    btc: {
+                        fastestFee: 1,
+                        halfHourFee: 1,
+                        hourFee: 1,
+                        economyFee: 1,
+                        minimumFee: 1,
+                        customizeFee: 1,
+                        selectedFeeType: 'economyFee',
+                        lastUpdated: 0,
+                    },
+                    mvc: {
+                        fastestFee: 1,
+                        halfHourFee: 1,
+                        hourFee: 1,
+                        economyFee: 1,
+                        minimumFee: 1,
+                        customizeFee: 1,
+                        selectedFeeType: 'fastestFee',
+                        lastUpdated: 0,
+                    },
+                    currentChain: 'mvc',
+                })
+            }),
+            actions: {
+                async fetchFeeRates(url) {
+                    try {
+                        const response = await fetch(url);
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        return await response.json();
+                    } catch (error) {
+                        console.error('Failed to fetch fee rates:', error);
+                        throw error;
+                    }
+                },
+
+                async updateBtcFeeRate() {
+                    try {
+                        const feeRates = await this.fetchFeeRates(CONSTANTS.BTC_FEE_RATE_URL);
+                        this.state.btc.fastestFee = feeRates.fastestFee;
+                        this.state.btc.halfHourFee = feeRates.halfHourFee;
+                        this.state.btc.hourFee = feeRates.hourFee;
+                        this.state.btc.economyFee = feeRates.economyFee;
+                        this.state.btc.minimumFee = feeRates.minimumFee;
+                        this.state.btc.lastUpdated = Date.now();
+                    } catch (error) {
+                        console.error('Failed to update BTC fee rates:', error);
+                    }
+                },
+
+                async updateMvcFeeRate() {
+                    try {
+                        const feeRates = await this.fetchFeeRates(CONSTANTS.MVC_FEE_RATE_URL);
+                        this.state.mvc.fastestFee = feeRates.fastestFee;
+                        this.state.mvc.halfHourFee = feeRates.halfHourFee;
+                        this.state.mvc.hourFee = feeRates.hourFee;
+                        this.state.mvc.economyFee = 1;
+                        this.state.mvc.minimumFee = feeRates.minimumFee;
+                        this.state.mvc.lastUpdated = Date.now();
+                    } catch (error) {
+                        console.error('Failed to update MVC fee rates:', error);
+                    }
+                },
+
+                async updateAllFeeRates() {
+                    await Promise.allSettled([this.updateBtcFeeRate(), this.updateMvcFeeRate()]);
+                },
+
+                setBtcCustomizeFee(feeRate) {
+                    this.state.btc.customizeFee = feeRate;
+                    this.state.btc.lastUpdated = Date.now();
+                },
+
+                setMvcCustomizeFee(feeRate) {
+                    this.state.mvc.customizeFee = feeRate;
+                    this.state.mvc.lastUpdated = Date.now();
+                },
+
+                setBtcFeeType(feeType) {
+                    this.state.btc.selectedFeeType = feeType;
+                },
+
+                setMvcFeeType(feeType) {
+                    this.state.mvc.selectedFeeType = feeType;
+                },
+
+                setCurrentChain(chain) {
+                    this.state.currentChain = chain;
+                },
+
+                btcFeeRate() {
+                    return this.state.btc[this.state.btc.selectedFeeType];
+                },
+
+                mvcFeeRate() {
+                    return this.state.mvc[this.state.mvc.selectedFeeType];
+                }
+            }
+        });
+
+        // Approved Store - 支付授权管理
+        const useApprovedStore = defineStore('approved', {
+            state: () => ({
+                last: useLocalStorage('last-approved', {
+                    isEnabled: true,
+                    isApproved: false,
+                    autoPaymentAmount: 10000,
+                })
+            }),
+            getters: {
+                has: (state) => !!state.last,
+                canUse: (state) => state.last.isEnabled && state.last.isApproved,
+                canApproved: (state) => state.last.isEnabled === true && state.last.isApproved === false
+            },
+            actions: {
+                async getPaymentStatus() {
+                    const connectionStore = useConnectionStore();
+                    const res = await connectionStore.adapter.autoPaymentStatus();
+                    this.last = res;
+                },
+
+                async getAutoPayment() {
+                    if (this.canApproved) {
+                        const connectionStore = useConnectionStore();
+                        const res = await connectionStore.adapter.autoPayment();
+                        if (res.message === "Auto payment approved") {
+                            this.last.isApproved = true;
+                        }
+                    }
+                },
+
+                clear() {
+                    if (!this.last) return;
+                    this.last.isEnabled = true;
+                    this.last.isApproved = false;
+                    this.last.autoPaymentAmount = 10000;
+                }
+            }
+        });
+
+        // Connection Store - 钱包连接管理
+        const useConnectionStore = defineStore('connection', {
+            state: () => ({
+                last: useLocalStorage('last-connection', {
+                    wallet: 'metalet',
+                    status: 'disconnected',
+                    address: '',
+                    pubKey: '',
+                })
+            }),
+            getters: {
+                has: (state) => !!state.last,
+                connected: (state) => state.last.status === 'connected' && !!state.last.address,
+                getAddress: (state) => state.last.address,
+                isTaproot: (state) => state.last.address.startsWith('bc1p') || state.last.address.startsWith('tb1p'),
+                getPubKey: (state) => state.last.pubKey,
+                provider: (state) => {
+                    if (!state.last) return null;
+                    return window.metaidwallet;
+                },
+                adapter: (state) => {
+                    if (!state.last) throw new Error('No connection');
+                    return getWalletAdapter(state.last.wallet);
+                }
+            },
+            actions: {
+                async connect(wallet) {
+                    const connection = this.last ? JSON.parse(JSON.stringify(this.last)) : {
+                        wallet,
+                        status: 'disconnected',
+                        address: '',
+                        pubKey: '',
+                    };
+
+                    try {
+                        let connectRes = await getWalletAdapter(wallet).connect();
+
+                        if (connectRes) {
+                            const networkStore = useNetworkStore();
+                            const appNetwork = networkStore.network;
+
+                            // 检查并切换网络
+                            const metaNetwork = await getWalletAdapter('metalet').getNetwork();
+                            if (metaNetwork !== appNetwork) {
+                                await getWalletAdapter('metalet').switchNetwork(appNetwork);
+                                connectRes = await getWalletAdapter('metalet').connect();
+                            }
+
+                            connection.address = connectRes.address;
+                            connection.pubKey = connectRes.pubKey;
+                            connection.status = 'connected';
+                            connection.wallet = wallet;
+
+                            this.last = connection;
+                            return this.last;
+                        }
+                    } catch (e) {
+                        const { showToast } = useToast();
+                        showToast(e.message, 'error');
+                        connection.status = 'disconnected';
+                        connection.wallet = wallet;
+                        this.last = connection;
+                    }
+
+                    return this.last;
+                },
+
+                async sync() {
+                    if (!this.connected) return;
+
+                    this.last.status = 'connected';
+                    this.last.address = await this.adapter.getAddress();
+                    this.last.pubKey = await this.adapter.getMvcPublickey();
+
+                    const networkStore = useNetworkStore();
+                    const appNetwork = networkStore.network;
+                    let networkSynced = true;
+
+                    const network = await this.adapter.getNetwork();
+                    if (network !== appNetwork) {
+                        networkSynced = false;
+                        this.disconnect();
+                    } else {
+                        const userStore = useUserStore();
+                        await userStore.setUserInfo(this.last.address);
+                    }
+
+                    if (networkSynced) {
+                        return this.last;
+                    }
+                },
+
+                async disconnect() {
+                    if (!this.last) return;
+
+                    this.last.status = 'disconnected';
+                    this.last.address = '';
+                    this.last.pubKey = '';
+                    this.last.wallet = 'metalet';
+
+                    const userStore = useUserStore();
+                    const approvedStore = useApprovedStore();
+                    const credentialsStore = useCredentialsStore();
+
+                    await userStore.clearUserInfo();
+                    credentialsStore.clear();
+
+                    if (window.metaidwallet?.smallPay) {
+                        await approvedStore.clear();
+                    }
+                }
+            }
+        });
+
+        // ==================== Metalet 钱包适配器 ====================
+        // 检查Metalet钱包
+        function checkMetalet() {
+            const connectionStore = useConnectionStore();
+            if (!window.metaidwallet && !connectionStore.connected) {
+                throw new Error('Please install the Metalet wallet extension first.');
+            }
+        }
+
+        // 检查Metalet状态
+        function checkMetaletStatus(res, actionName) {
+            if (res?.status) {
+                throw new Error(`Metalet ${actionName} status: ${res?.status}`);
+            }
+            return res;
+        }
+
+        // Metalet适配器对象
+        const getWalletAdapter = (wallet) => {
+            if (wallet !== 'metalet') {
+                throw new Error(`Unsupported wallet: ${wallet}`);
+            }
+
+            return {
+                async connect() {
+                    checkMetalet();
+                    const connectRes = await window.metaidwallet.connect();
+                    return checkMetaletStatus(connectRes, 'connect');
+                },
+
+                async getMvcAddress() {
+                    checkMetalet();
+                    const addressRes = await window.metaidwallet.getAddress();
+                    return checkMetaletStatus(addressRes, 'get address');
+                },
+
+                async getBtcAddress() {
+                    checkMetalet();
+                    const addressRes = await window.metaidwallet.btc.getAddress();
+                    return checkMetaletStatus(addressRes, 'get btc address');
+                },
+
+                async getMvcBalance() {
+                    checkMetalet();
+                    return await window.metaidwallet.getMvcBalance();
+                },
+
+                async signMvcMessage(message) {
+                    checkMetalet();
+                    const { signature } = await window.metaidwallet.signMessage({ message });
+                    const buf = Buffer.from(signature.signature, 'hex');
+                    return buf.toString('base64');
+                },
+
+                async getMvcPublickey() {
+                    checkMetalet();
+                    const MvcPubkey = await window.metaidwallet.getPublicKey();
+                    return checkMetaletStatus(MvcPubkey, 'get mvc publickey');
+                },
+
+                async getAddress() {
+                    checkMetalet();
+                    const addressRes = await window.metaidwallet.getAddress();
+                    return checkMetaletStatus(addressRes, 'get address');
+                },
+
+                async getNetwork() {
+                    checkMetalet();
+                    return await window.metaidwallet.getNetwork().then(({ network }) => {
+                        if (network === 'mainnet') {
+                            return 'livenet';
+                        }
+                        return 'testnet';
+                    });
+                },
+
+                async switchNetwork(network) {
+                    checkMetalet();
+                    return await window.metaidwallet.switchNetwork(network === 'livenet' ? 'mainnet' : 'testnet').then((res) => {
+                        if (res.status === 'canceled') {
+                            throw new Error('Switch network canceled');
+                        }
+                        if (res.network === 'mainnet') {
+                            return 'livenet';
+                        }
+                        return 'testnet';
+                    });
+                },
+
+                async disconnect() {},
+
+                async signMessage(message) {
+                    checkMetalet();
+                    const messageBase64 = await window.metaidwallet.btc.signMessage(message);
+                    return checkMetaletStatus(messageBase64, 'get signature');
+                },
+
+                async autoPaymentStatus() {
+                    checkMetalet();
+                    return await window.metaidwallet.autoPaymentStatus();
+                },
+
+                async autoPayment() {
+                    checkMetalet();
+                    return await window.metaidwallet.autoPayment();
+                }
+            };
+        };
+
+        // ==================== Connection Modal State ====================
+        const useConnectionModal = createGlobalState(() => {
+            const isConnectionModalOpen = ref(false);
+            const isWalletMissingModalOpen = ref(false);
+            const missingWallet = ref();
+
+            const openConnectionModal = () => {
+                isConnectionModalOpen.value = true;
+            };
+
+            const closeConnectionModal = () => {
+                isConnectionModalOpen.value = false;
+            };
+
+            const openWalletMissingModal = () => {
+                isWalletMissingModalOpen.value = true;
+            };
+
+            const closeWalletMissingModal = () => {
+                isWalletMissingModalOpen.value = false;
+            };
+
+            const setMissingWallet = (wallet) => {
+                missingWallet.value = wallet;
+                openWalletMissingModal();
+            };
+
+            return {
+                isConnectionModalOpen,
+                openConnectionModal,
+                closeConnectionModal,
+                isWalletMissingModalOpen,
+                openWalletMissingModal,
+                closeWalletMissingModal,
+                missingWallet,
+                setMissingWallet,
+            };
+        });
+
+        // ==================== Vue 组件定义 ====================
+
+        // Toast/Alert 组件
+        const ToastContainer = {
+            template: `
+                <div class="toast toast-top toast-end z-[10000]">
+                    <div v-for="alert in alerts" :key="alert.id"
+                         :class="['alert', alertClass(alert.type)]"
+                         class="shadow-lg">
+                        <span>{{ alert.message }}</span>
+                    </div>
+                </div>
+            `,
+            setup() {
+                const { alerts } = useToast();
+
+                const alertClass = (type) => {
+                    const classes = {
+                        'success': 'alert-success',
+                        'error': 'alert-error',
+                        'warning': 'alert-warning',
+                        'info': 'alert-info',
+                    };
+                    return classes[type] || 'alert-info';
+                };
+
+                return { alerts, alertClass };
+            }
+        };
+
+        // 连接钱包模态框组件
+        const ConnectWalletModal = {
+            template: `
+                <div v-if="isConnectionModalOpen" class="modal modal-open">
+                    <div class="modal-box relative">
+                        <button v-if="!loading"
+                                class="btn btn-sm btn-circle absolute right-2 top-2"
+                                @click="closeConnectionModal">
+                            ✕
+                        </button>
+
+                        <h3 class="font-bold text-lg mb-4">连接钱包</h3>
+
+                        <div class="space-y-3">
+                            <button class="btn btn-outline w-full justify-start gap-3"
+                                    @click="connectMetalet"
+                                    :disabled="loading">
+                                <div class="w-10 h-10 flex items-center justify-center">
+                                    <span class="text-2xl">🔐</span>
+                                </div>
+                                <div class="text-left flex-1">
+                                    <div class="font-semibold">Metalet</div>
+                                    <span class="text-sm text-gray-500">Connect to Metalet Wallet</span>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `,
+            setup() {
+                const { isConnectionModalOpen, closeConnectionModal, setMissingWallet } = useConnectionModal();
+                const connectionStore = useConnectionStore();
+                const credentialsStore = useCredentialsStore();
+                const rootStore = useRootStore();
+                const { showToast } = useToast();
+                const loading = ref(false);
+
+                const connectMetalet = async () => {
+                    if (!window.metaidwallet) {
+                        setMissingWallet('metalet');
+                        return;
+                    }
+
+                    try {
+                        loading.value = true;
+                        const connection = await connectionStore.connect('metalet');
+
+                        if (connection?.status === 'connected') {
+                            await credentialsStore.login();
+                            await sleep(300);
+                            closeConnectionModal();
+                        }
+
+                        // 检查BTC和MVC地址是否一致
+                        rootStore.checkBtcAddressSameAsMvc()
+                            .catch(() => {
+                                showToast('BTC 地址与 MVC 地址不一致', 'warning');
+                            });
+                    } catch (err) {
+                        showToast(err.message, 'error');
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                return {
+                    isConnectionModalOpen,
+                    closeConnectionModal,
+                    connectMetalet,
+                    loading
+                };
+            }
+        };
+
+        // 用户头像组件
+        const UserAvatar = {
+            props: {
+                image: String,
+                metaId: String,
+                name: String
+            },
+            template: `
+                <div class="avatar">
+                    <div class="w-10 h-10 rounded-full">
+                        <img :src="avatarSrc" :alt="name || 'User'" class="user-avatar" />
+                    </div>
+                </div>
+            `,
+            setup(props) {
+                const avatarSrc = computed(() => {
+                    if (props.image && props.image.startsWith('http')) {
+                        return props.image;
+                    }
+                    // 默认头像
+                    return 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"%3E%3Cpath d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/%3E%3C/svg%3E';
+                });
+
+                return { avatarSrc };
+            }
+        };
+
+        // 费率模态框组件
+        const FeeModal = {
+            props: {
+                modelValue: Boolean
+            },
+            emits: ['update:modelValue', 'confirm'],
+            template: `
+                <div v-if="modelValue" class="modal modal-open">
+                    <div class="modal-box w-full max-w-2xl">
+                        <h3 class="font-bold text-lg mb-4">Fee Settings</h3>
+
+                        <!-- BTC Section -->
+                        <div class="mb-6">
+                            <div class="flex items-center gap-2 mb-3 cursor-pointer" @click="selectChain('btc')">
+                                <span class="text-2xl">₿</span>
+                                <div>
+                                    <div class="font-semibold">BTC Network</div>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-3 gap-3">
+                                <button :class="['btn', selectedChain === 'btc' && selectedBTCFeeType === 'economyFee' ? 'btn-primary' : 'btn-outline']"
+                                        @click="selectFeeType('economyFee', 'btc')">
+                                    <div class="text-center">
+                                        <div class="font-semibold">ECO</div>
+                                        <div class="text-sm">{{ chainStore.state.btc.economyFee }} sat/vB</div>
+                                    </div>
+                                </button>
+
+                                <button :class="['btn', selectedChain === 'btc' && selectedBTCFeeType === 'halfHourFee' ? 'btn-primary' : 'btn-outline']"
+                                        @click="selectFeeType('halfHourFee', 'btc')">
+                                    <div class="text-center">
+                                        <div class="font-semibold">Normal</div>
+                                        <div class="text-sm">{{ chainStore.state.btc.halfHourFee }} sat/vB</div>
+                                    </div>
+                                </button>
+
+                                <button :class="['btn', selectedChain === 'btc' && selectedBTCFeeType === 'customizeFee' ? 'btn-primary' : 'btn-outline']"
+                                        @click="selectFeeType('customizeFee', 'btc')">
+                                    <div class="text-center">
+                                        <div class="font-semibold">Custom</div>
+                                        <input v-if="selectedChain === 'btc' && selectedBTCFeeType === 'customizeFee'"
+                                               v-model="customBTCValue"
+                                               type="number"
+                                               class="input input-sm w-16 text-center"
+                                               @click.stop
+                                               :min="1" />
+                                        <div v-else class="text-sm">{{ chainStore.state.btc.customizeFee }} sat/vB</div>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- MVC Section -->
+                        <div class="mb-6">
+                            <div class="flex items-center gap-2 mb-3 cursor-pointer" @click="selectChain('mvc')">
+                                <span class="text-2xl">Ⓜ</span>
+                                <div>
+                                    <div class="font-semibold">MVC Network</div>
+                                    <span class="badge badge-warning badge-sm">Bitcoin sidechain</span>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-3 gap-3">
+                                <button :class="['btn', selectedChain === 'mvc' && selectedMVCFeeType === 'economyFee' ? 'btn-primary' : 'btn-outline']"
+                                        @click="selectFeeType('economyFee', 'mvc')">
+                                    <div class="text-center">
+                                        <div class="font-semibold">ECO</div>
+                                        <div class="text-sm">{{ chainStore.state.mvc.economyFee }} sat/vB</div>
+                                    </div>
+                                </button>
+
+                                <button :class="['btn', selectedChain === 'mvc' && selectedMVCFeeType === 'fastestFee' ? 'btn-primary' : 'btn-outline']"
+                                        @click="selectFeeType('fastestFee', 'mvc')">
+                                    <div class="text-center">
+                                        <div class="font-semibold">High</div>
+                                        <div class="text-sm">{{ chainStore.state.mvc.fastestFee }} sat/vB</div>
+                                    </div>
+                                </button>
+
+                                <button :class="['btn', selectedChain === 'mvc' && selectedMVCFeeType === 'customizeFee' ? 'btn-primary' : 'btn-outline']"
+                                        @click="selectFeeType('customizeFee', 'mvc')">
+                                    <div class="text-center">
+                                        <div class="font-semibold">Custom</div>
+                                        <input v-if="selectedChain === 'mvc' && selectedMVCFeeType === 'customizeFee'"
+                                               v-model="customMVCValue"
+                                               type="number"
+                                               class="input input-sm w-16 text-center"
+                                               @click.stop />
+                                        <div v-else class="text-sm">{{ chainStore.state.mvc.customizeFee }} sat/vB</div>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="modal-action">
+                            <button class="btn" @click="$emit('update:modelValue', false)">Cancel</button>
+                            <button class="btn btn-primary" @click="handleConfirm">OK</button>
+                        </div>
+                    </div>
+                </div>
+            `,
+            setup(props, { emit }) {
+                const chainStore = useChainStore();
+                const { showToast } = useToast();
+
+                const selectedChain = ref('btc');
+                const selectedBTCFeeType = ref(chainStore.state.btc.selectedFeeType);
+                const selectedMVCFeeType = ref(chainStore.state.mvc.selectedFeeType);
+                const customBTCValue = ref(chainStore.state.btc.customizeFee);
+                const customMVCValue = ref(chainStore.state.mvc.customizeFee);
+
+                const selectChain = (chain) => {
+                    selectedChain.value = chain;
+                };
+
+                const selectFeeType = (feeType, chain) => {
+                    selectedChain.value = chain;
+                    if (chain === 'btc') {
+                        selectedBTCFeeType.value = feeType;
+                    } else {
+                        selectedMVCFeeType.value = feeType;
+                    }
+                };
+
+                const handleConfirm = () => {
+                    chainStore.setCurrentChain(selectedChain.value);
+
+                    if (selectedChain.value === 'btc') {
+                        chainStore.setBtcFeeType(selectedBTCFeeType.value);
+                        if (selectedBTCFeeType.value === 'customizeFee') {
+                            if (customBTCValue.value < 1) {
+                                showToast('BTC custom fee must be at least 1 sat/vB', 'error');
+                                customBTCValue.value = 1;
+                            }
+                            chainStore.setBtcCustomizeFee(customBTCValue.value);
+                        }
+                    } else {
+                        chainStore.setMvcFeeType(selectedMVCFeeType.value);
+                        if (selectedMVCFeeType.value === 'customizeFee') {
+                            chainStore.setMvcCustomizeFee(customMVCValue.value);
+                        }
+                    }
+
+                    emit('update:modelValue', false);
+                };
+
+                watch(() => props.modelValue, (newValue) => {
+                    if (newValue) {
+                        selectedChain.value = chainStore.state.currentChain;
+                        if (selectedChain.value === 'btc') {
+                            selectedBTCFeeType.value = chainStore.state.btc.selectedFeeType;
+                            customBTCValue.value = chainStore.state.btc.customizeFee;
+                        } else {
+                            selectedMVCFeeType.value = chainStore.state.mvc.selectedFeeType;
+                            customMVCValue.value = chainStore.state.mvc.customizeFee;
+                        }
+                    }
+                }, { immediate: true });
+
+                return {
+                    chainStore,
+                    selectedChain,
+                    selectedBTCFeeType,
+                    selectedMVCFeeType,
+                    customBTCValue,
+                    customMVCValue,
+                    selectChain,
+                    selectFeeType,
+                    handleConfirm
+                };
+            }
+        };
+
+        // 用户操作组件
+        const LoginUserOperate = {
+            components: {
+                UserAvatar,
+                FeeModal
+            },
+            template: `
+                <div class="flex items-center gap-3">
+                    <!-- 连接钱包按钮 -->
+                    <button v-if="!connectionStore.connected"
+                            class="btn btn-primary"
+                            @click="openConnectionModal">
+                        Connect Wallet
+                    </button>
+
+                    <!-- 授权按钮 -->
+                    <button v-else-if="!credentialsStore.get"
+                            class="btn btn-primary"
+                            @click="credentialsStore.login()">
+                        Authorize
+                    </button>
+
+                    <!-- 用户信息 -->
+                    <template v-else-if="userStore.isAuthorized">
+                        <UserAvatar
+                            :image="userStore.last.avatar"
+                            :meta-id="userStore.last.metaid"
+                            :name="userStore.last.name" />
+
+                        <!-- 用户名 -->
+                        <span class="font-medium">{{ userStore.last.name || 'Anonymous' }}</span>
+                    </template>
+
+                    <!-- 更多操作菜单 -->
+                    <div class="dropdown dropdown-end" v-if="userStore.isAuthorized">
+                        <label tabindex="0" class="btn btn-circle btn-ghost">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-5 h-5 stroke-current">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"></path>
+                            </svg>
+                        </label>
+                        <ul tabindex="0" class="dropdown-content menu p-2 shadow bg-base-100 rounded-box w-64 mt-3 z-[9999]">
+                            <!-- Fee Settings -->
+                            <li>
+                                <a @click="handleFeeClick" class="flex items-center justify-between">
+                                    <div class="flex items-center gap-2">
+                                        <span>{{ chainStore.state.currentChain.toUpperCase() }}</span>
+                                        <span class="font-medium">{{ currentFeeRate }}</span>
+                                        <span class="text-sm text-gray-500">
+                                            {{ chainStore.state.currentChain === 'btc' ? 'sat/vB' : 'sats/b' }}
+                                        </span>
+                                    </div>
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                                    </svg>
+                                </a>
+                            </li>
+
+                            <div class="divider my-0"></div>
+
+                            <!-- Logout -->
+                            <li>
+                                <a @click="connectionStore.disconnect()" class="text-error">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                                    </svg>
+                                    Logout
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!-- Fee Modal -->
+                    <FeeModal v-model="showFeeModal" @confirm="handleFeeConfirm" />
+                </div>
+            `,
+            setup() {
+                const { openConnectionModal } = useConnectionModal();
+                const connectionStore = useConnectionStore();
+                const credentialsStore = useCredentialsStore();
+                const userStore = useUserStore();
+                const chainStore = useChainStore();
+
+                const showFeeModal = ref(false);
+
+                const currentFeeRate = computed(() => {
+                    const currentChain = chainStore.state.currentChain;
+                    const chainData = chainStore.state[currentChain];
+                    const selectedFeeType = chainData.selectedFeeType;
+                    return chainData[selectedFeeType];
+                });
+
+                const handleFeeClick = () => {
+                    showFeeModal.value = true;
+                };
+
+                const handleFeeConfirm = (data) => {
+                    console.log('Fee configuration updated:', data);
+                };
+
+                return {
+                    openConnectionModal,
+                    connectionStore,
+                    credentialsStore,
+                    userStore,
+                    chainStore,
+                    showFeeModal,
+                    currentFeeRate,
+                    handleFeeClick,
+                    handleFeeConfirm
+                };
+            }
+        };
+
+        // 主应用组件
+        const App = {
+            components: {
+                ConnectWalletModal,
+                LoginUserOperate,
+                ToastContainer
+            },
+            template: `
+                <div class="min-h-screen bg-base-200">
+                    <!-- Toast Container -->
+                    <ToastContainer />
+
+                    <!-- 顶部导航栏 -->
+                    <div class="navbar bg-base-100 shadow-lg">
+                        <div class="flex-1">
+                            <a class="btn btn-ghost normal-case text-xl">IDNote</a>
+                        </div>
+                        <div class="flex-none">
+                            <LoginUserOperate />
+                        </div>
+                    </div>
+
+                    <!-- 主内容区域 -->
+                    <div class="container mx-auto p-8">
+                        <div class="hero min-h-[60vh]">
+                            <div class="hero-content text-center">
+                                <div class="max-w-md">
+                                    <h1 class="text-5xl font-bold mb-5">Welcome to IDNote</h1>
+                                    <p class="mb-5">Connect your Metalet wallet to get started with IDNote.</p>
+
+                                    <!-- 用户已授权显示的内容 -->
+                                    <div v-if="userStore.isAuthorized" class="card bg-base-100 shadow-xl mt-8">
+                                        <div class="card-body">
+                                            <h2 class="card-title">Account Information</h2>
+                                            <div class="stats stats-vertical shadow">
+                                                <div class="stat">
+                                                    <div class="stat-title">Address</div>
+                                                    <div class="stat-value text-sm break-all">{{ userStore.last.address }}</div>
+                                                </div>
+                                                <div class="stat">
+                                                    <div class="stat-title">MetaID</div>
+                                                    <div class="stat-value text-sm break-all">{{ userStore.last.metaid || 'Not set' }}</div>
+                                                </div>
+                                                <div class="stat">
+                                                    <div class="stat-title">Display Name</div>
+                                                    <div class="stat-value text-sm">{{ userStore.last.name || 'Anonymous' }}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 连接钱包模态框 -->
+                    <ConnectWalletModal />
+                </div>
+            `,
+            setup() {
+                const rootStore = useRootStore();
+                const connectionStore = useConnectionStore();
+                const userStore = useUserStore();
+                const credentialsStore = useCredentialsStore();
+                const chainStore = useChainStore();
+                const { showToast } = useToast();
+                const { closeConnectionModal } = useConnectionModal();
+
+                const accountInterval = ref(null);
+
+                // 连接Metalet钱包
+                async function connectMetalet() {
+                    try {
+                        const connection = await connectionStore.connect('metalet');
+                        if (connection?.status === 'connected') {
+                            await credentialsStore.login();
+                        }
+                    } catch (error) {
+                        showToast(error.message, 'error');
+                    }
+                }
+
+                // 处理网络变更
+                function handleNetworkChanged(network) {
+                    const networkStore = useNetworkStore();
+                    const appNetwork = networkStore.network;
+                    if (network !== appNetwork) {
+                        connectionStore.disconnect();
+                    }
+                }
+
+                // Metalet账户变更处理
+                const metaletAccountsChangedHandler = () => {
+                    try {
+                        if (connectionStore.last.wallet !== 'metalet') return;
+                        if (rootStore.isWebView) return;
+                        connectionStore.disconnect();
+                        showToast('Metalet 账户已变更。正在刷新页面...', 'warning');
+                        sleep().then(() => completeReload());
+                    } catch (error) {
+                        console.error('Error in metaletAccountsChangedHandler:', error);
+                    }
+                };
+
+                // Metalet网络变更处理
+                const metaletNetworkChangedHandler = (network) => {
+                    if (connectionStore.last.wallet !== 'metalet') return;
+                    if (rootStore.isWebView) return;
+                    handleNetworkChanged(network);
+                };
+
+                // App登录成功处理
+                const appLoginSuccessHandler = async (data) => {
+                    try {
+                        if (!userStore.isAuthorized) {
+                            await connectMetalet();
+                        }
+                    } catch (error) {
+                        showToast(error, 'error');
+                    }
+                };
+
+                // App账户切换处理
+                const appAccountSwitchHandler = async (data) => {
+                    try {
+                        if (rootStore.isWebView) {
+                            await connectionStore.disconnect();
+                            await connectMetalet();
+                        }
+                    } catch (error) {
+                        throw new Error(error);
+                    }
+                };
+
+                // App登出处理
+                const appLogoutHandler = async (data) => {
+                    try {
+                        console.log("退出登录成功", data);
+                        if (userStore.isAuthorized) {
+                            await connectionStore.disconnect();
+                            closeConnectionModal();
+                        }
+                    } catch (error) {
+                        console.error('Error in Logout handler:', error);
+                    }
+                };
+
+                onMounted(async () => {
+                    // 初始化费率
+                    await chainStore.updateAllFeeRates();
+
+                    // 定时检查账户状态
+                    accountInterval.value = setInterval(async () => {
+                        try {
+                            rootStore.checkWebViewBridge();
+                            if (rootStore.isWebView) return;
+
+                            if (!userStore.isAuthorized) {
+                                if (rootStore.isWebView) {
+                                    await connectMetalet();
+                                }
+                            }
+
+                            if (window.metaidwallet && connectionStore.last.status === 'connected' && userStore.isAuthorized) {
+                                const res = await window.metaidwallet.getAddress();
+                                if (res?.status === 'not-connected' || userStore.last?.address !== res) {
+                                    connectionStore.disconnect();
+                                    showToast('Metalet 账户已变更', 'warning');
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Error checking account status:', error);
+                        }
+                    }, 2000);
+
+                    // 设置Metalet事件监听
+                    const checkMetalet = () => {
+                        rootStore.checkWebViewBridge();
+                        if (window.metaidwallet) {
+                            try {
+                                window.metaidwallet?.on?.('accountsChanged', metaletAccountsChangedHandler);
+                                window.metaidwallet?.on?.('networkChanged', metaletNetworkChangedHandler);
+                                window.metaidwallet?.on?.('LoginSuccess', appLoginSuccessHandler);
+                                window.metaidwallet?.on?.('onAccountSwitch', appAccountSwitchHandler);
+                                window.metaidwallet?.on?.('Logout', appLogoutHandler);
+                            } catch (err) {
+                                console.error('Failed to setup Metalet listeners:', err);
+                            }
+                        } else {
+                            setTimeout(checkMetalet, 100);
+                        }
+                    };
+
+                    checkMetalet();
+
+                    // 检查BTC和MVC地址一致性
+                    if (window.metaidwallet && connectionStore.last.status === 'connected' && userStore.isAuthorized) {
+                        rootStore.checkBtcAddressSameAsMvc()
+                            .catch(() => {
+                                showToast('Metalet BTC当前地址与MVC地址不一致，请切换BTC地址与MVC地址一致后再进行使用', 'warning');
+                                setTimeout(() => {
+                                    connectionStore.disconnect();
+                                }, 3000);
+                            });
+                    }
+                });
+
+                onUnmounted(() => {
+                    if (accountInterval.value) {
+                        clearInterval(accountInterval.value);
+                    }
+
+                    // 移除事件监听
+                    try {
+                        window.metaidwallet?.removeListener?.('accountsChanged', metaletAccountsChangedHandler);
+                        window.metaidwallet?.removeListener?.('networkChanged', metaletNetworkChangedHandler);
+                        window.metaidwallet?.removeListener?.('LoginSuccess', appLoginSuccessHandler);
+                        window.metaidwallet?.removeListener?.('Logout', appLogoutHandler);
+                        window.metaidwallet?.removeListener?.('onAccountSwitch', appAccountSwitchHandler);
+                    } catch (error) {
+                        console.error('Error removing event listeners:', error);
+                    }
+                });
+
+                return {
+                    userStore,
+                    connectionStore
+                };
+            }
+        };
+
+        // ==================== 初始化应用 ====================
+        const pinia = createPinia();
+        const app = createApp(App);
+        app.use(pinia);
+        app.mount('#app');
+    </script>
+</body>
+</html>
