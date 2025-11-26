@@ -4275,7 +4275,7 @@
                                         <label class="flex items-center gap-2 cursor-pointer">
                                             <input type="radio"
                                                    v-model="privacySetting"
-                                                   value="aes"
+                                                   value="1"
                                                    @change="handleContentChange"
                                                    class="radio radio-primary" />
                                             <span class="label-text">私密</span>
@@ -4972,7 +4972,7 @@
 
                         // 设置隐私状态（根据 encryption 字段）
                         if (data.encryption && data.encryption !== '0') {
-                            privacySetting.value = 'aes';
+                            privacySetting.value = '1';
                         } else {
                             privacySetting.value = '0';
                         }
@@ -4980,7 +4980,26 @@
                         // 处理加密内容：如果笔记是加密的，先解密再渲染
                         let contentToRender = noteData.value.content || '';
                         if (data.encryption && data.encryption !== '0') {
-                            try {
+                            if(data.encryption == '1'){
+                                 try {
+                                const decryptRes = await window.metaidwallet.eciesDecrypt({
+                                    encrypted:noteData.value.content
+                                })
+                                if(decryptRes.status == 'ok'){
+                                    contentToRender=decryptRes.result
+                                    noteData.value.content = contentToRender;
+                                }else{
+                                     showToast('无法获取解密密钥，无法编辑加密笔记', 'error');
+                                      router.push('/');
+                                    return;
+                                }
+                            } catch (error) {
+                                 showToast('无法获取解密密钥，无法编辑加密笔记', 'error');
+                                  router.push('/');
+                                    return;
+                            }
+                            }else if(data.encryption == 'aes'){
+                                  try {
                                 // 获取签名密钥
                                 let sigKey = queryCurrentSigKey();
                                 if (!sigKey) {
@@ -5005,6 +5024,10 @@
                                 router.push('/');
                                 return;
                             }
+                            }
+                           
+
+                          
                         }
 
                         // 设置编辑器内容（已解密）
@@ -5387,32 +5410,44 @@
 
                         // 4. 处理加密（如果是私密笔记）
                         let encryption = '0';
-                        if (privacySetting.value === 'aes') {
-                            encryption = 'aes';
+                        if (privacySetting.value === '1') {
+                            encryption = '1';
 
-                            // 获取签名密钥
-                            let sigKey = queryCurrentSigKey();
-
-                            if (!sigKey) {
-                                // 如果没有签名密钥，先签名
-                                sigKey = await signMessageAndStore();
-                            }
-
-                            if (sigKey) {
-                                try {
-                                    // 加密内容
-                                    processedContent = await encryptGCM(processedContent, sigKey);
-                                } catch (error) {
-                                    console.error('加密失败:', error);
-                                    showToast('加密失败，将发布为公开笔记', 'warning');
-                                    encryption = '0';
-                                }
-                            } else {
-                                showToast('无法获取签名密钥，将发布为公开笔记', 'warning');
+                            try {
+                              const encryptRes=  await window.metaidwallet.eciesEncrypt({message:processedContent})
+                              if(encryptRes.status == 'ok'){
+                                 processedContent =encryptRes.result
+                              }else{
+                                showToast('加密失败，将发布为公开笔记', 'warning');
                                 encryption = '0';
+                              }
+                            } catch (error) {
+                                 showToast('加密失败，将发布为公开笔记', 'warning');
+                                 encryption = '0';
                             }
-                        }
+                            // // 获取签名密钥
+                            // let sigKey = queryCurrentSigKey();
 
+                            // if (!sigKey) {
+                            //     // 如果没有签名密钥，先签名
+                            //     sigKey = await signMessageAndStore();
+                            // }
+
+                            // if (sigKey) {
+                            //     try {
+                            //         // 加密内容
+                            //         processedContent = await encryptGCM(processedContent, sigKey);
+                            //     } catch (error) {
+                            //         console.error('加密失败:', error);
+                            //         showToast('加密失败，将发布为公开笔记', 'warning');
+                            //         encryption = '0';
+                            //     }
+                            // } else {
+                            //     showToast('无法获取签名密钥，将发布为公开笔记', 'warning');
+                            //     encryption = '0';
+                            // }
+                        }
+                        
                         // 5. 构建最终的笔记数据
                         const finalNoteData = {
                             ...noteData.value,
@@ -5810,7 +5845,7 @@
                 });
 
                 // 解密笔记内容
-                const decryptNoteContent = async (encryptedContent) => {
+                const decryptNoteContent = async (encryptedContent,encryptType) => {
                     try {
                         // 判断是否是自己的笔记
                         if (!isOwner.value) {
@@ -5818,7 +5853,8 @@
                             return '此笔记内容已加密';
                         }
 
-                        // 获取签名密钥
+                        if(encryptType == 'aes'){
+                             // 获取签名密钥
                         let sigKey = queryCurrentSigKey();
                         if (!sigKey) {
                             // 如果没有签名密钥，先签名
@@ -5832,6 +5868,22 @@
                         // 解密内容
                         const decryptedContent = await decryptGCM(encryptedContent, sigKey);
                         return decryptedContent;
+                        }else if(encryptType == '1'){
+                            try {
+                                      const decryptedContent = await window.metaidwallet.eciesDecrypt({encrypted:encryptedContent})
+                        if(decryptedContent.status == 'ok'){
+                                 return decryptedContent.result
+                        }else{
+                             return '解密失败，无法显示内容';
+                        }
+                            } catch (error) {
+                                return '解密失败，无法显示内容';
+                            }
+                        }
+
+                      
+                       
+                       
                     } catch (error) {
                         console.error('解密失败:', error);
                         return '解密失败，无法显示内容';
@@ -5861,7 +5913,7 @@
                         // 检查笔记是否加密
                         if (noteData.value.encryption && noteData.value.encryption !== '0') {
                             // 笔记已加密，需要解密
-                            const decryptedContent = await decryptNoteContent(noteData.value.content);
+                            const decryptedContent = await decryptNoteContent(noteData.value.content,noteData.value.encryption);
                             noteData.value.content = decryptedContent;
                         }
 
